@@ -31,6 +31,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.hanjul.planner.data.Agenda
+import com.hanjul.planner.data.Entry
 import com.hanjul.planner.data.Item
 import com.hanjul.planner.data.Step
 import com.hanjul.planner.domain.ItemType
@@ -51,8 +52,35 @@ private fun stepsOf(all: List<Step>, id: Long) = all.filter { it.projectId == id
 
 // ───────────────────────── 현황 ─────────────────────────
 
+/** 현황 상단 숫자 칸을 눌렀을 때 보여줄 목록 종류 */
+enum class StatFilter(val label: String) {
+    TODAY("오늘 할 일"),
+    OVERDUE("마감 지남"),
+    SOON("3일 안 마감"),
+    WEEK("이번 주 일정"),
+    DONE("7일간 완료"),
+}
+
+/** 오늘부터 이번 주 일요일까지의 일정 (반복 포함, 날짜별) */
+private fun weekEventsOf(items: List<Item>, today: LocalDate): List<Entry> {
+    val sunday = today.with(TemporalAdjusters.nextOrSame(DayOfWeek.SUNDAY))
+    val out = ArrayList<Entry>()
+    var d = today
+    while (!d.isAfter(sunday)) { out += Agenda.eventsOn(items, d); d = d.plusDays(1) }
+    return out
+}
+
+/** 최근 7일 안에 완료한 항목 (최근 것부터) */
+private fun doneLast7Days(items: List<Item>): List<Item> {
+    val since = System.currentTimeMillis() - 7L * 24 * 3600 * 1000
+    return items.filter { it.done && it.doneAt != null && it.doneAt > since }.sortedByDescending { it.doneAt }
+}
+
 @Composable
-fun DashboardScreen(items: List<Item>, steps: List<Step>, today: LocalDate, act: Actions) {
+fun DashboardScreen(
+    items: List<Item>, steps: List<Step>, today: LocalDate, act: Actions,
+    onStat: (StatFilter) -> Unit = {}, onProjects: () -> Unit = {},
+) {
     val overdue = Agenda.overdue(items, today)
     val soon = Agenda.dueSoon(items, today)
     val stepOverdue = Agenda.stepsOverdue(items, steps, today)
@@ -60,14 +88,9 @@ fun DashboardScreen(items: List<Item>, steps: List<Step>, today: LocalDate, act:
     val todaySteps = Agenda.stepsDueOn(items, steps, today)
     val todayEvents = Agenda.eventsOn(items, today)
     val todayDue = Agenda.dueOn(items, today)
-    val sunday = today.with(TemporalAdjusters.nextOrSame(DayOfWeek.SUNDAY))
-    var weekEvents = 0
-    var d = today
-    while (!d.isAfter(sunday)) { weekEvents += Agenda.eventsOn(items, d).size; d = d.plusDays(1) }
+    val weekEvents = weekEventsOf(items, today).size
     val projects = items.filter { it.type == ItemType.PROJECT && !it.done }
-    val doneThisWeek = items.count {
-        it.done && it.doneAt != null && it.doneAt > System.currentTimeMillis() - 7L * 24 * 3600 * 1000
-    }
+    val doneThisWeek = doneLast7Days(items).size
 
     LazyColumn(Modifier.fillMaxSize()) {
         item {
@@ -82,14 +105,14 @@ fun DashboardScreen(items: List<Item>, steps: List<Step>, today: LocalDate, act:
         }
         item {
             Row(Modifier.padding(12.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                StatCard("오늘 할 일", todayDue.size + todayEvents.size + todaySteps.size, MaterialTheme.colorScheme.primary, Modifier.weight(1f))
-                StatCard("마감 지남", overdue.size + stepOverdue.size, Overdue, Modifier.weight(1f))
-                StatCard("3일 안 마감", soon.size + stepSoon.size, Soon, Modifier.weight(1f))
+                StatCard("오늘 할 일", todayDue.size + todayEvents.size + todaySteps.size, MaterialTheme.colorScheme.primary, Modifier.weight(1f)) { onStat(StatFilter.TODAY) }
+                StatCard("마감 지남", overdue.size + stepOverdue.size, Overdue, Modifier.weight(1f)) { onStat(StatFilter.OVERDUE) }
+                StatCard("3일 안 마감", soon.size + stepSoon.size, Soon, Modifier.weight(1f)) { onStat(StatFilter.SOON) }
             }
             Row(Modifier.padding(horizontal = 12.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                StatCard("이번 주 일정", weekEvents, EventColor, Modifier.weight(1f))
-                StatCard("진행 중 프로젝트", projects.size, ProjectColor, Modifier.weight(1f))
-                StatCard("7일간 완료", doneThisWeek, TaskColor, Modifier.weight(1f))
+                StatCard("이번 주 일정", weekEvents, EventColor, Modifier.weight(1f)) { onStat(StatFilter.WEEK) }
+                StatCard("진행 중 프로젝트", projects.size, ProjectColor, Modifier.weight(1f), onProjects)
+                StatCard("7일간 완료", doneThisWeek, TaskColor, Modifier.weight(1f)) { onStat(StatFilter.DONE) }
             }
         }
         if (overdue.isNotEmpty() || stepOverdue.isNotEmpty()) {
@@ -140,11 +163,92 @@ fun DashboardScreen(items: List<Item>, steps: List<Step>, today: LocalDate, act:
 }
 
 @Composable
-private fun StatCard(label: String, value: Int, color: Color, modifier: Modifier) {
-    Column(modifier.border(1.dp, if (value > 0) color else Pal.Gray3).padding(horizontal = 10.dp, vertical = 8.dp)) {
+private fun StatCard(label: String, value: Int, color: Color, modifier: Modifier, onClick: () -> Unit) {
+    Column(
+        modifier.border(1.dp, if (value > 0) color else Pal.Gray3)
+            .clickable(onClick = onClick)
+            .padding(horizontal = 10.dp, vertical = 8.dp),
+    ) {
         Text(value.toString().padStart(2, '0'), fontSize = 30.sp, fontWeight = FontWeight.Bold,
             color = if (value > 0) color else Pal.Gray4)
         Text(label, style = MaterialTheme.typography.labelSmall, color = Pal.Gray5, maxLines = 1)
+    }
+}
+
+// ───────────────────────── 현황 숫자 → 목록 ─────────────────────────
+
+/** 현황 숫자 칸을 눌렀을 때: 그 숫자에 들어간 항목만 모아 보여 준다 */
+@Composable
+fun StatListScreen(filter: StatFilter, items: List<Item>, steps: List<Step>, today: LocalDate, act: Actions, onBack: () -> Unit) {
+    LazyColumn(Modifier.fillMaxSize()) {
+        item {
+            Row(
+                Modifier.fillMaxWidth().clickable(onClick = onBack).padding(horizontal = 12.dp, vertical = 10.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text("◀ 현황", color = Pal.Cyan, style = MaterialTheme.typography.labelLarge)
+            }
+        }
+        when (filter) {
+            StatFilter.TODAY -> {
+                val events = Agenda.eventsOn(items, today)
+                val due = Agenda.dueOn(items, today)
+                val stepDue = Agenda.stepsDueOn(items, steps, today)
+                item { SectionTitle("오늘 할 일 ${events.size + due.size + stepDue.size}건") }
+                if (events.isEmpty() && due.isEmpty() && stepDue.isEmpty()) item { EmptyHint("오늘 할 일이 없어요.") }
+                if (events.isNotEmpty()) {
+                    item { SectionTitle("오늘 일정", EventColor) }
+                    items(events, key = { "e${it.item.id}" }) { e ->
+                        ItemRow(e.item, today, { act.open(e.item) }, { act.toggle(e.item) }, showDate = false, occurrence = e.date)
+                    }
+                }
+                if (due.isNotEmpty() || stepDue.isNotEmpty()) {
+                    item { SectionTitle("오늘까지 할 일", TaskColor) }
+                    items(due, key = { "d${it.item.id}" }) { e ->
+                        ItemRow(e.item, today, { act.open(e.item) }, { act.toggle(e.item) }, showDate = false, steps = stepsOf(steps, e.item.id))
+                    }
+                    items(stepDue, key = { "ds${it.step.id}" }) { e ->
+                        StepRow(e, today, { act.openProject(e.project.id) }, { act.toggleStep(e.step) }, showDate = false)
+                    }
+                }
+            }
+            StatFilter.OVERDUE, StatFilter.SOON -> {
+                val list = if (filter == StatFilter.OVERDUE) Agenda.overdue(items, today) else Agenda.dueSoon(items, today)
+                val stepList = if (filter == StatFilter.OVERDUE) Agenda.stepsOverdue(items, steps, today)
+                    else Agenda.stepsDueSoon(items, steps, today)
+                val color = if (filter == StatFilter.OVERDUE) Overdue else Soon
+                item { SectionTitle("${filter.label} ${list.size + stepList.size}건", color) }
+                if (list.isEmpty() && stepList.isEmpty()) item {
+                    EmptyHint(if (filter == StatFilter.OVERDUE) "마감 지난 일이 없어요." else "3일 안에 마감인 일이 없어요.")
+                }
+                items(list, key = { "i${it.id}" }) {
+                    ItemRow(it, today, { act.open(it) }, { act.toggle(it) }, steps = stepsOf(steps, it.id))
+                }
+                items(stepList, key = { "st${it.step.id}" }) { e ->
+                    StepRow(e, today, { act.openProject(e.project.id) }, { act.toggleStep(e.step) })
+                }
+            }
+            StatFilter.WEEK -> {
+                val week = weekEventsOf(items, today)
+                item { SectionTitle("이번 주 일정 ${week.size}건", EventColor) }
+                if (week.isEmpty()) item { EmptyHint("이번 주 남은 일정이 없어요.") }
+                week.groupBy { it.date!! }.forEach { (day, entries) ->
+                    item(key = "h${day.toEpochDay()}") { SectionTitle(KoreanDate.date(day, today), Pal.Gray5) }
+                    items(entries, key = { "w${day.toEpochDay()}_${it.item.id}" }) { e ->
+                        ItemRow(e.item, today, { act.open(e.item) }, { act.toggle(e.item) }, showDate = false, occurrence = e.date)
+                    }
+                }
+            }
+            StatFilter.DONE -> {
+                val done = doneLast7Days(items)
+                item { SectionTitle("7일간 완료 ${done.size}건", TaskColor) }
+                if (done.isEmpty()) item { EmptyHint("최근 7일 동안 끝낸 일이 없어요.") }
+                items(done, key = { "x${it.id}" }) {
+                    ItemRow(it, today, { act.open(it) }, { act.toggle(it) }, steps = stepsOf(steps, it.id))
+                }
+            }
+        }
+        item { Gap(24) }
     }
 }
 
