@@ -82,6 +82,7 @@ fun PlannerApp(vm: MainViewModel) {
     val today by vm.today.collectAsState()
     var tab by rememberSaveable { mutableStateOf(0) }
     var openProjectId by rememberSaveable { mutableStateOf<Long?>(null) }
+    var statFilter by rememberSaveable { mutableStateOf<StatFilter?>(null) }
     var editing by remember { mutableStateOf<Item?>(null) }
     val snackbar = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()
@@ -103,10 +104,17 @@ fun PlannerApp(vm: MainViewModel) {
     )
 
     BackHandler(enabled = openProjectId != null) { openProjectId = null }
+    BackHandler(enabled = openProjectId == null && statFilter != null) { statFilter = null }
 
     Scaffold(
         containerColor = Pal.Black,
-        topBar = { StatusHeader(today, tabs[tab].takeIf { openProjectId == null } ?: "프로젝트") },
+        topBar = {
+            StatusHeader(today, when {
+                openProjectId != null -> "프로젝트"
+                statFilter != null -> "현황 > ${statFilter!!.label}"
+                else -> tabs[tab]
+            })
+        },
         snackbarHost = { SnackbarHost(snackbar) },
         bottomBar = {
             Column(Modifier.imePadding()) {
@@ -117,7 +125,7 @@ fun PlannerApp(vm: MainViewModel) {
                         snackbar.showSnackbar("OK > ${type.label} 저장됨: ${parsed.title}")
                     }
                 }
-                FunctionKeyBar(tab, openProjectId == null) { tab = it; openProjectId = null }
+                FunctionKeyBar(tab, openProjectId == null && statFilter == null) { tab = it; openProjectId = null; statFilter = null }
             }
         },
     ) { pad ->
@@ -132,8 +140,11 @@ fun PlannerApp(vm: MainViewModel) {
                     onEdit = { editing = project },
                     onBack = { openProjectId = null },
                 )
+            } else if (statFilter != null) {
+                StatListScreen(statFilter!!, items, steps, today, act, onBack = { statFilter = null })
             } else when (tab) {
-                0 -> DashboardScreen(items, steps, today, act)
+                0 -> DashboardScreen(items, steps, today, act,
+                    onStat = { statFilter = it }, onProjects = { tab = 3 })
                 1 -> TodayScreen(items, steps, today, act)
                 2 -> CalendarScreen(items, steps, today, act)
                 else -> ProjectsScreen(items, steps, today, act)
